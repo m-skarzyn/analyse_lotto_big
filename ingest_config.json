@@ -1,8 +1,8 @@
 {
-  "csv_url": "https://twoj-serwer.pl/dane_losowan.csv",
+  "csv_url": "https://www.wynikilotto.net.pl/download/lotto.csv",
   "separator": ",",
   "encoding": "utf-8",
-  "date_format": "%Y-%m-%d",
+  "date_format": "%d-%m-%Y",
   "has_header": false,
   "column_mapping_by_name": {
     "ID_LOS": "numer_losowania",
