@@ -1,17 +1,21 @@
-=== KONTEKST PROJEKTU DLA ASYSTENTA AI ===
+=== KONTEKST PROJEKTU: LOKALNY SYSTEM PREDYKCJI GRUP ZDARZEŃ ===
 
 1. CEL I ZAKRES PROJEKTU
-Budowa lokalnego, lekkiego systemu w języku Python (środowisko Linux, venv, brak zewnętrznych serwerów baz danych) do predykcji sekwencyjnej na danych tabelarycznych. Model ma za zadanie przewidzieć identyfikator grupy (L_GROUP) kolejnego nadchodzącego zdarzenia na podstawie statystyk wyliczonych wyłącznie z obserwacji historycznych. System musi wspierać iteracyjne dodawanie nowych cech (feature engineering) poprzez pliki konfiguracyjne JSON oraz przechowywać i porównywać trafność historycznych wersji modeli w miarę napływu nowych obserwacji.
+Zbudowanie lekkiego, lokalnego pipeline'u statystycznego/ML w Pythonie (środowisko Linux + VS Code + venv) bez baz danych i usług działających w tle. System przewiduje identyfikator grupy liczbowej (L_GROUP) dla kolejnego przyszłego zdarzenia (losowania odbywające się we wtorki, czwartki i soboty) na podstawie historii kilkunastu tysięcy rekordów z wielu lat.
 
-2. STRUKTURA DANYCH I ZASADY DOMENOWE
+2. STRUKTURA DANYCH WEJŚCIOWYCH I WEWNĘTRZNYCH
 - Zdarzenia mają charakter sekwencyjny i występują wyłącznie w określone dni tygodnia: wtorek (weekday=1), czwartek (weekday=3) oraz sobota (weekday=5).
-- Dane surowe (data/raw_events.parquet) przechowują wyłącznie zdarzenia, które już wystąpiły. Schemat kolumn:
-  * ID_LOS (int64): przyrastający o 1 identyfikator zdarzenia.
-  * DATE_LOS (date): główny klucz czasowy zdarzenia.
-  * YEAR_LOS (int32): rok wyliczony z DATE_LOS podczas ładowania.
-  * L_1 .. L_6 (int32): sześć posortowanych rosnąco liczb całkowitych z przedziału 1–49 (nieużywane bezpośrednio jako cechy wejściowe modelu).
-  * L_GROUP (string): zmienna docelowa (target) oraz podstawa do liczenia statystyk. Wyliczana jako konkatenacja z separatorem "_" matematycznie zaokrąglonych wartości L_i / 10 (np. "0_1_2_3_4_5").
-- Rzeczywisty zbiór klas L_GROUP jest naturalnie zawężony do kilkudziesięciu najczęstszych układów (rozkład zbliżony do krzywej dzwonowej), z pojedynczymi rzadkimi układami ("rodzynkami") na ogonach rozkładu, których nie usuwamy ze zbioru treningowego (otrzymują niską wagę poprzez zliczenia roczne).
+- Dane źródłowe (CSV pobierane z URL):
+  * ID_LOS (INT): identyfikator zdarzenia przyrastający o 1.
+  * DATE_LOS (DATE): główny identyfikator czasowy zdarzenia (wtorek, czwartek lub sobota).
+  * L_1 .. L_6 (INT): 6 posortowanych rosnąco liczb całkowitych z przedziału 1..49 (nieużywane bezpośrednio jako cechy).
+- Wyliczane podczas ładowania (ingest.py -> data/raw_events.parquet):
+  * YEAR_LOS (INT): rok wyciągnięty z DATE_LOS.
+  * L_GROUP (STRING): konkatenacja zaokrąglonych matematycznie (połówki w górę) wartości L_i/10 połączonych znakiem "_" (np. "0_1_2_2_3_4").
+- Plik cech historycznych (features.py -> data/features_cache.parquet):
+  * Zawiera wyłącznie zaobserwowane zdarzenia oraz cechy (feat_*) przesunięte o 1 krok w dół (shift(1)), aby wiersz N widział wyłącznie przeszłość (brak wycieku danych).
+- Log predykcji (predict.py -> logs/predictions.parquet):
+  * Odseparowany od danych treningowych. Przechowuje: target_date (wyliczona kolejna data wt/czw/sob), model_version, predicted_group (Top-1), confidence, top3_groups, actual_group, is_correct_top1, is_correct_top3.
 
 3. ARCHITEKTURA PIPELINE'U I KLUCZOWE ZASADY TECHNICZNE
 - Brak wycieku danych (Data Leakage Prevention): Wszystkie cechy historyczne (feat_*) dla wiersza N muszą być przesunięte o minimum 1 krok w dół (.shift(1)), aby wiersz N widział wyłącznie informacje znane przed jego wystąpieniem. Jedynym wyjątkiem znanym z góry dla wiersza N jest dzień tygodnia (day_of_week).
@@ -19,23 +23,19 @@ Budowa lokalnego, lekkiego systemu w języku Python (środowisko Linux, venv, br
 - Format zapisu: Apache Parquet z silnikiem pyarrow (rezygnacja z fastparquet ze względu na jego wygaszanie).
 - Model: LightGBM (LGBMClassifier) z automatyczną selekcją cech opartą na Permutation Importance na podziale czasowym (80% historia / 20% walidacja).
 
-4. ARCHITEKTURA PLIKÓW W REPOZYTORIUM
-- ingest_config.json: Konfiguracja źródła CSV (csv_url, csv_separator, date_format, column_mapping).
-- config.json: Parametry reguły L_GROUP (columns, divisor, separator) oraz lista definicji cech (features). Obsługiwane typy cech:
-  * day_of_week: dzień tygodnia (0-6).
-  * lag: L_GROUP sprzed K losowań.
-  * current_year_freq: narastająca liczba wystąpień grupy z kroku N-1 w bieżącym roku (do kroku N-1 włącznie, zerowana przy zmianie roku).
-  * prev_years_freq: suma wystąpień grupy z kroku N-1 w K pełnych latach poprzedzających YEAR_LOS wiersza N.
-  * rolling_freq: liczba wystąpień grupy z kroku N-1 w oknie ostatnich W losowań.
-  * draws_since_last: liczba losowań od poprzedniego wystąpienia grupy z kroku N-1.
-  * bucket_stat: statystyki na koszykach 0..5 z kroku N-1 (sum, span).
-- ingest.py: Pobiera CSV (z configu lub flagi --url), mapuje kolumny, deduplikuje po (ID_LOS, DATE_LOS), wylicza YEAR_LOS i L_GROUP, zapisuje data/raw_events.parquet.
-- features.py: Silnik przeliczający cechy z config.json. Zapisuje data/features_cache.parquet oraz udostępnia wiersz przyszłości w RAM.
-- train.py: Wykrywa zmiany w config.json (nowe cechy lub zmiana reguły grupy), uruchamia selekcję cech, trenuje model na 100% historii (zachowując rzadkie klasy) i zapisuje paczkę (model, selected_features, available_features, group_rule) do models/model_YYYYMMDD_HHMMSS.joblib.
-- predict.py: Uruchamia ingest, weryfikuje trafność wcześniejszych predykcji w logs/predictions.parquet (uzupełniając actual_group, is_correct_top1, is_correct_top3), a następnie generuje prognozy Top-1 i Top-3 dla kolejnej daty dla wszystkich modeli w katalogu models/.
+4. ARCHITEKTURA SKRYPTÓW I KONFIGURACJI
+- ingest_config.json: Konfiguracja źródła CSV (csv_url, separator, encoding, date_format, flaga has_header oraz dwa słowniki mapowania: column_mapping_by_name dla plików z nagłówkiem oraz column_mapping_by_index dla plików bez nagłówka).
+- config.json: Parametryzacja tworzenia L_GROUP (divisor=10, separator="_") oraz deklaratywna lista metryk (features).
+  * Dostępne typy metryk w features.py: day_of_week, lag, rolling_freq, draws_since_last, bucket_stat (sum/span), current_year_freq (narastająca liczba wystąpień grupy z kroku N-1 w bieżącym roku do momentu N-1), prev_years_freq (suma wystąpień grupy z kroku N-1 w K pełnych latach poprzedzających YEAR_LOS - nadaje wagę częstym układom względem rzadkich "rodzynków").
+- ingest.py: Pobiera CSV, mapuje kolumny wg has_header (po nazwie lub indeksie 0-based), wylicza YEAR_LOS i L_GROUP, deduplikuje po (ID_LOS, DATE_LOS) i dopisuje nowe rekordy do data/raw_events.parquet.
+- features.py: Liczy cechy historyczne oraz tworzy tymczasowy wiersz N+1 (kolejny wt/czw/sob) wyłącznie w pamięci RAM na potrzeby predykcji.
+- train.py: Wykrywa zmiany w config.json (lub flagę --force), przeprowadza czasowy podział 80/20, wykonuje selekcję cech metodą Permutation Importance (LGBMClassifier), trenuje finalny model na 100% historii (zachowując wszystkie klasy, w tym rzadkie) i zapisuje paczkę w models/model_YYYYMMDD_HHMMSS.joblib.
+- predict.py: Uruchamia ingest.py, weryfikuje wcześniejsze prognozy w logs/predictions.parquet po nadejściu wyników, a następnie uruchamia wszystkie zapisane wersje modeli na wierszu N+1 w RAM i dopisuje nowe prognozy do logu.
 
-5. INSTRUKCJA DLA AI W KOLEJNYCH PROMPTACH
-Podczas rozbudowy systemu:
-1. Zachowaj pełną parametryzację w config.json oraz ingest_config.json.
-2. Pilnuj ścisłego przesunięcia czasowego (.shift(1)) przy dopisywaniu nowych typów statystyk w features.py.
-3. Nigdy nie dopisuj niezaobserwowanych wierszy predykcji do plików w katalogu data/.
+5. ZASADY DALSZEGO ROZWOJU
+- Wiersz przyszłości (N+1) nigdy nie może być zapisywany do raw_events.parquet ani features_cache.parquet.
+- Nowe metryki powinny być dodawane jako nowe typy w features.py i konfigurowane poprzez config.json.
+- Używamy wyłącznie biblioteki pyarrow (fastparquet jest wygaszany).
+- Zachowaj pełną parametryzację w config.json oraz ingest_config.json.
+- Pilnuj ścisłego przesunięcia czasowego (.shift(1)) przy dopisywaniu nowych typów statystyk w features.py.
+- Nigdy nie dopisuj niezaobserwowanych wierszy predykcji do plików w katalogu data/.
