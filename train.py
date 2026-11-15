@@ -66,4 +66,7 @@ def run_training(force: bool = False):
     print(f"Wybrane cechy ({len(selected_feats)}/{len(all_feat_cols)}): {selected_feats}")
 
 if __name__ == "__main__":
-    run_training()
+    parser = argparse.ArgumentParser(description="Trening modelu predykcyjnego.")
+    parser.add_argument("--force", action="store_true", help="Wymuś trening mimo braku zmian w config.json")
+    args = parser.parse_args()
+    run_training(force=args.force)

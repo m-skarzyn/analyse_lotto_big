@@ -18,7 +18,7 @@ def get_next_draw_date(last_date: date) -> date:
         return last_date + timedelta(days=2)
     elif wd == 5:
         return last_date + timedelta(days=3)
-    days_ahead = min((d - wd) % 7 or 7 for d in)
+    days_ahead = min((d - wd) % 7 or 7 for d in [1, 3, 5])
     return last_date + timedelta(days=days_ahead)
 
 def _apply_feature_definitions(df: pd.DataFrame, buckets: pd.DataFrame, cfg: dict) -> pd.DataFrame:
@@ -143,7 +143,7 @@ def get_future_row_in_memory(raw_df: pd.DataFrame) -> tuple[date, pd.DataFrame]:
         "YEAR_LOS": [np.int32(next_date.year)],
         "L_GROUP": [np.nan]
     })
-    future_buckets = pd.DataFrame(np.nan, index=, columns=hist_buckets.columns)
+    future_buckets = pd.DataFrame(np.nan, index=[0], columns=hist_buckets.columns)
     
     temp_df = pd.concat([df_hist[["ID_LOS", "DATE_LOS", "YEAR_LOS", "L_GROUP"]], future_row], ignore_index=True)
     temp_buckets = pd.concat([hist_buckets, future_buckets], ignore_index=True)

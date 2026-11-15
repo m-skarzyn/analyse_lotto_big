@@ -1,73 +1,109 @@
-# analyse_lotto_big
+# Lokalny Pipeline Predykcji Statystycznych
 
-1. Pełna separacja danych: Sztuczny wiersz do predykcji przyszłości (`N+1`) jest tworzony wyłącznie w pamięci RAM na ułamek sekundy w momencie odpytywania modelu. Nigdy nie trafia do `raw_events.parquet` ani `features_cache.parquet`. Wyniki trafiają do oddzielnego pliku `logs/predictions.parquet` wraz z wyliczoną datą kolejnego losowania (wtorek, czwartek lub sobota) i wersją modelu.
-2. Plik parametryzacyjny (`config.json`): Wszystkie reguły tworzenia grupy `L_GROUP` (np. dzielnik) oraz definicje statystyk kroczących trzymasz w czytelnym pliku JSON. Dodanie nowej cechy sprowadza się do dopisania jednego wpisu w pliku konfiguracyjnym bez ingerencji w kod Pythona.
+Minimalistyczny, lokalny system w języku Python (Linux) służący do przyrostowego pobierania danych ze źródła CSV, wyliczania autorskich statystyk kroczących (*feature engineering*) oraz trenowania i ewaluacji modeli klasyfikacji sekwencyjnej (`LightGBM`).
 
+## 1. Wymagania i instalacja
 
-## Project Layout
+System nie wymaga żadnych zewnętrznych serwerów baz danych ani aplikacji działających w tle. Wszystkie dane zapisywane są w lekkim formacie kolumnowym **Apache Parquet** (`pyarrow`).
+
+W aktywnym środowisku `venv` zainstaluj wymagane pakiety:
+
+```bash
+pip install pandas pyarrow lightgbm scikit-learn requests joblib
 ```
-analyse_lotto_big/
-├── config.json                  # Parametry grupy L_GROUP oraz lista statystyk (features)
-├── data/
-│   ├── raw_events.parquet       # Czyste dane historyczne (ID_LOS, DATE_LOS, L_1..L_6)
-│   └── features_cache.parquet   # Przeliczone cechy historyczne (tylko zaobserwowane)
-├── models/
+
+## 2. Struktura plików projektu
+
+```text
+projekt_predykcja/
+├── ingest_config.json           # Parametry źródła CSV (URL, separator, mapowanie kolumn)
+├── config.json                  # Reguła wyliczania L_GROUP oraz definicje cech (features)
+├── ingest.py                    # Pobieranie CSV i dopisywanie brakujących rekordów
+├── features.py                  # Silnik cech historycznych oraz generator wiersza przyszłości w RAM
+├── train.py                     # Automatyczna selekcja cech i wersjonowanie modeli
+├── predict.py                   # Weryfikacja starych prognoz i predykcja na kolejną datę
+├── README.md                    # Dokumentacja projektu
+├── PROJECT_CONTEXT.txt          # Opis projektu do wykorzystania w przyszłych promptach AI
+├── requirements.txt             # lista bibliotek wymaganych do pracy
+├── data/                        # (Tworzone automatycznie)
+│   ├── raw_events.parquet       # Czyste obserwacje historyczne
+│   └── features_cache.parquet   # Przeliczone cechy historyczne
+├── models/                      # (Tworzone automatycznie)
 │   └── model_YYYYMMDD_HHMMSS.joblib
-├── logs/
-│   └── predictions.parquet      # Historia predykcji, daty docelowe i weryfikacja trafności
-├── ingest.py                    # Pobieranie CSV i dopisywanie nowych losowań
-├── features.py                  # Silnik liczący L_GROUP i cechy na podstawie config.json
-├── train.py                     # Selekcja cech i trening nowej wersji modelu
-└── predict.py                   # Weryfikacja starych prognoz i predykcja na kolejny dzień
+└── logs/                        # (Tworzone automatycznie)
+    └── predictions.parquet      # Historia predykcji i weryfikacja ich trafności
 
-└── requirements.txt   
 ```
 
+## 3. Konfiguracja przed pierwszym uruchomieniem
 
-## Jak będzie działać pętla weryfikacji w praktyce?
+### Krok A: Konfiguracja wejścia (`ingest_config.json`)
+Uzupełnij adres URL oraz dopasuj mapowanie nazw kolumn z Twojego pliku CSV na wewnętrzne nazwy systemu:
 
-1. Gdy pojawia się nowe zdarzenie (`predict.py`): Skrypt dopisuje nowy rekord do `raw_events.parquet`, wylicza jego rzeczywistą grupę i sprawdza w `predictions_log.parquet`, co na ten temat przewidywały zapisane wcześniej modele (v1, v2 itd.). Zapisuje wynik trafienia (1 lub 0) do logu, a następnie generuje prognozę na kolejny krok.
-2. Gdy wymyślisz nową cechę (`features.py` -> `train.py`): Dopisujesz jedną funkcję w `features.py` i uruchamiasz `train.py`. Skrypt wykrywa nową kolumnę, przeprowadza selekcję cech, trenuje nowy model i zapisuje go w folderze models/ z nową sygnaturą czasową, nie kasując poprzednich wersji.
+```json
+{
+  "csv_url": "https://twoj-adres-do-pliku.csv",
+  "csv_separator": ",",
+  "date_format": "%Y-%m-%d",
+  "column_mapping": {
+    "ID_LOS": "nazwa_kolumny_id_w_csv",
+    "DATE_LOS": "nazwa_kolumny_daty_w_csv",
+    "L_1": "liczba_1",
+    "L_2": "liczba_2",
+    "L_3": "liczba_3",
+    "L_4": "liczba_4",
+    "L_5": "liczba_5",
+    "L_6": "liczba_6"
+  }
+}
+```
+*Jeśli w Twoim pliku CSV nie ma kolumny z przyrastającym identyfikatorem `ID_LOS`, ustaw w mapowaniu `"ID_LOS": null` – skrypt `ingest.py` wygeneruje go automatycznie.*
 
+### Krok B: Konfiguracja grupy i cech (`config.json`)
+Plik `config.json` definiuje sposób tworzenia klasy docelowej `L_GROUP` (dzielnik i separator) oraz listę statystyk (`features`), które mają zostać policzone dla każdego zdarzenia na podstawie historii.
 
-## `ingest.py` – Pobieranie CSV i przyrostowa aktualizacja danych
+## 4. Jak używać poszczególnych skryptów
 
-Pobiera plik z URL, sprawdza po parze (ID_LOS, DATE_LOS), których rekordów jeszcze nie ma w `data/raw_events.parquet`, i dopisuje tylko nowe.
+### 1. Pobieranie danych (`ingest.py`)
+Pobiera plik CSV, sprawdza po parze `(ID_LOS, DATE_LOS)` lub dacie, które rekordy są nowe, wylicza `YEAR_LOS` oraz `L_GROUP` i dopisuje wyłącznie brakujące wiersze do `data/raw_events.parquet`.
+* Uruchomienie z domyślnym URL z `ingest_config.json`:
+  ```bash
+  python ingest.py
+  ```
+* Uruchomienie z nadpisaniem adresu URL z linii poleceń:
+  ```bash
+  python ingest.py --url "https://inny-adres.csv"
+  ```
 
+### 2. Trenowanie modelu (`train.py`)
+Przelicza cechy historyczne, sprawdza czy w `config.json` pojawiły się nowe cechy lub zmieniła się reguła grupy. Jeśli wykryje zmianę, przeprowadza selekcję cech (*Permutation Importance*) i zapisuje nową wersję modelu w katalogu `models/` (nie kasując starszych wersji).
+* Standardowe uruchomienie (trenuje tylko przy wykryciu zmian w `config.json`):
+  ```bash
+  python train.py
+  ```
+* Wymuszenie ponownego treningu na aktualnych danych (np. po dopisaniu wielu nowych obserwacji):
+  ```bash
+  python train.py --force
+  ```
 
-## `features.py` – Dynamiczne grupowanie i przeliczanie cech
-Ten moduł czyta `config.json`, wylicza `L_GROUP` (pamiętając, że w Pythonie np.`floor(x / 10 + 0.5)` daje klasyczne zaokrąglenie matematyczne znane z Excela, w przeciwieństwie do domyślnego `round()` w Pythonie, które zaokrągla do parzystych). Zawiera też funkcję wyznaczającą kolejną datę (wtorek -> czwartek -> sobota -> wtorek).
-Skrypt wspiera tryb przyrostowy na pliku `data/features_cache.parquet`.
+### 3. Codzienna predykcja i ewaluacja (`predict.py`)
+Główny skrypt operacyjny. Wykonuje kolejno:
+1. Pobiera najnowsze obserwacje z CSV (wywołując `ingest.py`).
+2. Sprawdza w `logs/predictions.parquet`, czy dla świeżo zaobserwowanych dat istniały wcześniejsze predykcje – jeśli tak, uzupełnia wynik rzeczywisty oraz flagi trafności (`is_correct_top1`, `is_correct_top3`).
+3. Tworzy w pamięci RAM tymczasowy wiersz dla kolejnej daty zdarzenia (wtorek, czwartek lub sobota) – **nigdy nie zapisując go w danych bazowych**.
+4. Odpytuje wszystkie zapisane w `models/` wersje modeli i dopisuje ich prognozy (Top-1 oraz Top-3) do `logs/predictions.parquet`.
 
+* Uruchomienie z domyślnym URL z `ingest_config.json`:
+  ```bash
+  python predict.py
+  ```
+* Uruchomienie z przekazaniem własnego adresu URL:
+  ```bash
+  python predict.py --url "https://twoj-adres-do-pliku.csv"
+  ```
 
-## `train.py` – Automatyczna selekcja cech i wersjonowanie modeli
-
-Skrypt sprawdza, czy pojawiły się nowe cechy (`feat_*`), odrzuca szum za pomocą *Permutation Importance* i zapisuje nową wersję modelu w katalogu `models/` tylko wtedy, gdy zestaw cech uległ zmianie (lub gdy wymusisz trening).
-Filtruje grupy występujące rzadziej niż `min_class_count` (domyślnie 3 razy w historii), przeprowadza selekcję cech i zapisuje model.
-
-## `predict.py` – Codzienna pętla: aktualizacja, ocena modeli i predykcja
-
-Ten plik uruchamiasz, gdy pojawia się nowe zdarzenie. Pobiera CSV, sprawdza trafność wszystkich zapisanych wcześniej modeli na nowym zdarzeniu (zapisując wynik w `logs/evaluation.parquet`) i zwraca predykcję na kolejny krok
-Gdy pojawia się nowe losowanie:
-1. Dociąga nowe wiersze do raw_events.parquet.
-2. Przelicza cechy historyczne (zapisując je w features_cache.parquet).
-3. Sprawdza w logs/predictions.parquet, czy dla świeżo zaobserwowanych dat istniały wcześniejsze predykcje – jeśli tak, uzupełnia kolumny actual_group oraz is_correct (1 lub 0).
-4. Tworzy w pamięci RAM sztuczny wiersz na kolejną datę (wtorek/czwartek/sobota), wywołuje predykcję dla każdego zapisanego modelu i dopisuje te prognozy do logs/predictions.parquet (z pustym wynikiem rzeczywistym, czekającym na kolejne losowanie).
-
-Zamiast polegać tylko na jednym strzale, skrypt zapisuje w logs/predictions.parquet **Top-1** oraz listę **Top-3** najbardziej prawdopodobnych grup na kolejną datę, a po nadejściu wyników sprawdza zarówno trafienie główne (is_correct_top1), jak i obecność w pierwszej trójce (`is_correct_top3`).
-
-
-## `config.json` – Plik parametryzacyjny
-
-Tutaj definiujesz sposób tworzenia `L_GROUP` oraz listę metryk. Gdy zechcesz dodać nową metrykę (np. okno 20 losowań dla konkretnej grupy), dopisujesz ją tutaj i uruchamiasz `train.py`.
-- lag: Jaka grupa wypadła 1, 2 lub \(K\) losowań temu.
-- rolling_freq: Ile razy grupa z poprzedniego losowania wystąpiła w ostatnich \(N\) losowaniach.
-- draws_since_last: Ile losowań minęło od poprzedniego wystąpienia tej konkretnej grupy.
-- day_of_week: Dzień tygodnia zdarzenia (wtorek=1, czwartek=3, sobota=5) – kluczowy, bo znasz go przed losowaniem!
-
-
-## Jak wygląda Twoja codzienna praca z tym kodem?
-
-• Gdy pojawia się nowe zdarzenie: Uruchamiasz `python predict.py`. Skrypt sam dociąga brakujące wiersze z URL, dopisuje wyniki trafności do `logs/evaluation.parquet` dla każdego historycznego modelu i drukuje prognozę na kolejny krok.
-• **Gdy wymyślisz nową statystykę**: Otwierasz `features.py`, dopisujesz jedną linijkę zaczynającą się od `res["feat_..."]` i uruchamiasz `python train.py`. Skrypt sam wykrywa nową kolumnę, sprawdza czy realnie poprawia ona wyniki na danych historycznych i zapisuje nową wersję modelu w katalogu `models/`.
-
+### 4. Przeliczanie samych cech (`features.py`)
+Zazwyczaj wywoływany automatycznie przez `train.py` i `predict.py`, ale można go uruchomić ręcznie, aby odświeżyć plik podglądowy `data/features_cache.parquet` po edycji `config.json`:
+```bash
+python features.py
+```
