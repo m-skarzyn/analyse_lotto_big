@@ -16,7 +16,7 @@ pip install pandas pyarrow lightgbm scikit-learn requests joblib
 
 ## 2. Struktura plików projektu
 ```text
-projekt_predykcja/
+analyse_lotto_big/
 ├── ingest_config.json           # Konfiguracja pobierania danych z sieci (URL, separator, format daty, flaga nagłówka `has_header` oraz mapowanie po nazwach lub indeksach kolumn).
 ├── config.json                  # Konfiguracja reguły wyliczania `L_GROUP` (dzielnik, separator) oraz definicje metryk (`features`), które mają być wyliczane i testowane przez model.
 ├── ingest.py                    # Skrypt pobierający CSV, mapujący kolumny, wyliczający `YEAR_LOS` oraz `L_GROUP`, a następnie dopisujący wyłącznie brakujące rekordy do `data/raw_events.parquet`.
