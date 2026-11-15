@@ -1,0 +1,19 @@
+{
+  "csv_url": "https://twoj-adres-do-pliku.csv",
+  "csv_options": {
+    "separator": ",",
+    "encoding": "utf-8",
+    "date_format": "%Y-%m-%d",
+    "decimal": "."
+  },
+  "column_mapping": {
+    "ID_LOS": "ID_LOS",
+    "DATE_LOS": "DATE_LOS",
+    "L_1": "L_1",
+    "L_2": "L_2",
+    "L_3": "L_3",
+    "L_4": "L_4",
+    "L_5": "L_5",
+    "L_6": "L_6"
+  }
+}

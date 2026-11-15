@@ -9,15 +9,15 @@ from features import build_historical_features, get_future_row_in_memory
 MODELS_DIR = "models"
 PRED_LOG_FILE = "logs/predictions.parquet"
 
-def run_pipeline(override_url: str | None = None):
+def run_pipeline(csv_url: str | None = None):
     os.makedirs("logs", exist_ok=True)
-    added_count = update_from_csv(override_url=override_url)
+    added_count = update_from_csv(csv_url)
     print(f"Pobrano nowych losowań: {added_count}")
 
     raw_df = pd.read_parquet(RAW_FILE, engine="pyarrow")
     hist_df = build_historical_features(raw_df)
-
-    models = sorted([f for f in os.listdir(MODELS_DIR) if f.endswith(".joblib")])
+    
+    models = sorted([f for f in os.listdir(MODELS_DIR) if f.endswith(".joblib")]) if os.path.exists(MODELS_DIR) else []
     if not models:
         print("Brak modeli w katalogu models/. Uruchom najpierw train.py.")
         return
@@ -26,7 +26,7 @@ def run_pipeline(override_url: str | None = None):
     if os.path.exists(PRED_LOG_FILE):
         log_df = pd.read_parquet(PRED_LOG_FILE, engine="pyarrow")
         actual_map = dict(zip(hist_df["DATE_LOS"], hist_df["L_GROUP"]))
-
+        
         for idx, row in log_df.iterrows():
             if pd.isna(row["actual_group"]) and row["target_date"] in actual_map:
                 actual_val = actual_map[row["target_date"]]
@@ -42,29 +42,29 @@ def run_pipeline(override_url: str | None = None):
 
     # 2. Predykcja dla kolejnej daty wyłącznie w RAM
     next_date, future_X = get_future_row_in_memory(raw_df)
-
+    
     new_predictions = []
     for m_file in models:
         bundle = joblib.load(os.path.join(MODELS_DIR, m_file))
         m_ver = bundle["version"]
-
+        
         already_predicted = (
-            (log_df["target_date"] == next_date) &
+            (log_df["target_date"] == next_date) & 
             (log_df["model_version"] == m_ver)
         ).any()
-
+        
         if not already_predicted:
             model = bundle["model"]
             req_feats = bundle["selected_features"]
-
+            
             probas = model.predict_proba(future_X[req_feats])[0]
             classes = model.classes_
             top3_idx = np.argsort(probas)[::-1][:3]
-
+            
             top1_group = classes[top3_idx[0]]
             top1_conf = float(probas[top3_idx[0]])
             top3_str = ",".join(classes[top3_idx])
-
+            
             new_predictions.append({
                 "target_date": next_date,
                 "model_version": m_ver,
@@ -84,14 +84,13 @@ def run_pipeline(override_url: str | None = None):
     latest_entry = log_df[
         (log_df["target_date"] == next_date) & (log_df["model_version"] == latest_ver)
     ].iloc[-1]
-
+    
     print(f"Data kolejnego losowania: {next_date}")
     print(f"Top-1 (Model {latest_ver}): {latest_entry['predicted_group']} ({latest_entry['confidence']:.1%})")
     print(f"Top-3 kandydaci: {latest_entry['top3_groups']}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Aktualizacja danych i predykcja kolejnego zdarzenia.")
-    parser.add_argument("--url", type=str, default=None, help="Opcjonalny URL do pliku CSV nadpisujący ingest_config.json")
+    parser = argparse.ArgumentParser(description="Aktualizacja danych, weryfikacja i predykcja.")
+    parser.add_argument("--url", type=str, default=None, help="Opcjonalny adres URL pliku CSV (nadpisuje ingest_config.json)")
     args = parser.parse_args()
-    run_pipeline(override_url=args.url)
-    
+    run_pipeline(csv_url=args.url)
