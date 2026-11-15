@@ -25,17 +25,17 @@ def run_training(force: bool = False):
             print("Konfiguracja cech bez zmian. Pomijam trenowanie.")
             return
 
-    # Odfiltrowanie skrajnych "rodzynków" występujących rzadziej niż min_class_count
-    min_count = cfg["group_rule"].get("min_class_count", 3)
-    counts = df["L_GROUP"].value_counts()
-    valid_groups = counts[counts >= min_count].index
-    df_clean = df[df["L_GROUP"].isin(valid_groups)].reset_index(drop=True)
+    # Podział czasowy 80/20
+    split_idx = int(len(df) * 0.8)
+    train_df = df.iloc[:split_idx]
+    val_df = df.iloc[split_idx:]
     
-    print(f"Liczba unikalnych grup w treningu: {len(valid_groups)} (z {len(counts)} wszystkich)")
+    # W zbiorze walidacyjnym oceniamy tylko klasy znane z części treningowej
+    known_classes = set(train_df["L_GROUP"].unique())
+    val_df_safe = val_df[val_df["L_GROUP"].isin(known_classes)]
 
-    split_idx = int(len(df_clean) * 0.8)
-    X_train, y_train = df_clean[all_feat_cols].iloc[:split_idx], df_clean["L_GROUP"].iloc[:split_idx]
-    X_val, y_val = df_clean[all_feat_cols].iloc[split_idx:], df_clean["L_GROUP"].iloc[split_idx:]
+    X_train, y_train = train_df[all_feat_cols], train_df["L_GROUP"]
+    X_val, y_val = val_df_safe[all_feat_cols], val_df_safe["L_GROUP"]
 
     base_model = LGBMClassifier(n_estimators=100, random_state=42, verbose=-1)
     base_model.fit(X_train, y_train)
@@ -47,8 +47,9 @@ def run_training(force: bool = False):
     if not selected_feats:
         selected_feats = all_feat_cols
 
+    # Finalny model trenuje się na 100% historii (w tym na wszystkich rzadkich klasach)
     final_model = LGBMClassifier(n_estimators=150, random_state=42, verbose=-1)
-    final_model.fit(df_clean[selected_feats], df_clean["L_GROUP"])
+    final_model.fit(df[selected_feats], df["L_GROUP"])
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     model_path = os.path.join(MODELS_DIR, f"model_{timestamp}.joblib")
@@ -61,7 +62,7 @@ def run_training(force: bool = False):
         "group_rule": cfg["group_rule"]
     }
     joblib.dump(bundle, model_path)
-    print(f"Zapisano nowy model: {model_path}")
+    print(f"Zapisano nowy model: {model_path} (liczba klas: {df['L_GROUP'].nunique()})")
     print(f"Wybrane cechy ({len(selected_feats)}/{len(all_feat_cols)}): {selected_feats}")
 
 if __name__ == "__main__":
