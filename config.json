@@ -1,0 +1,20 @@
+{
+  "group_rule": {
+    "columns": ["L_1", "L_2", "L_3", "L_4", "L_5", "L_6"],
+    "divisor": 10,
+    "separator": "_",
+    "min_class_count": 3
+  },
+  "features": [
+    { "name": "feat_prev_group", "type": "lag", "lag": 1 },
+    { "name": "feat_lag2_group", "type": "lag", "lag": 2 },
+    { "name": "feat_freq_last_15", "type": "rolling_freq", "window": 15 },
+    { "name": "feat_freq_last_50", "type": "rolling_freq", "window": 50 },
+    { "name": "feat_draws_since_seen", "type": "draws_since_last" },
+    { "name": "feat_day_of_week", "type": "day_of_week" },
+    { "name": "feat_prev_bucket_sum", "type": "bucket_stat", "stat": "sum", "lag": 1 },
+    { "name": "feat_prev_bucket_span", "type": "bucket_stat", "stat": "span", "lag": 1 },
+    { "name": "feat_prev_unique_buckets", "type": "bucket_stat", "stat": "unique", "lag": 1 },
+    { "name": "feat_roll5_bucket_sum_mean", "type": "bucket_rolling_mean", "stat": "sum", "window": 5 }
+  ]
+}
